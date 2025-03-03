@@ -4,12 +4,13 @@ use crate::task_manager::{
     task::{Task, TaskLoopFunctionType, TaskSetupFunctionType, TaskStopConditionFunctionType},
     TaskManagerTrait, TASK_MANAGER,
 };
-use alloc::vec::Vec;
+
+use crate::task_manager::task_queue::TaskQueue;
 
 /// The number of tasks id can fit into a type usize.
-type TaskIdType = usize;
+pub(crate) type TaskIdType = usize;
 /// Type of priority number of a task.
-type TaskPriorityType = usize;
+pub(crate) type TaskPriorityType = usize;
 
 /// Number of existing priorities.
 const NUM_PRIORITIES: usize = 11;
@@ -49,9 +50,9 @@ pub struct CooperativeTask {
 
 /// Cooperative task manager representation. Based on round-robin scheduling with priorities.
 #[repr(C)]
-pub struct CooperativeTaskManager {
+pub struct CooperativeTaskManager<T: TaskQueue> {
     /// Array of vectors with ```CooperativeTask``` to execute.
-    pub(crate) tasks: [Option<Vec<CooperativeTask>>; NUM_PRIORITIES],
+    pub(crate) tasks: [Option<T>; NUM_PRIORITIES],
     /// ```id``` of a task that will be created the next. The first created task has id 1.
     pub(crate) next_task_id: TaskIdType,
     /// ```id``` of executing task.
@@ -59,7 +60,10 @@ pub struct CooperativeTaskManager {
 }
 
 /// Cooperative implementation of ```TaskManagerTrait```.
-impl TaskManagerTrait for CooperativeTaskManager {
+impl<T> TaskManagerTrait for CooperativeTaskManager<T>
+where
+    T: TaskQueue,
+{
     /// Add a task to task manager. It should pass setup, loop, and condition functions.
     /// Task added with this function has ```priority``` 0.
     fn add_task(
@@ -78,13 +82,15 @@ impl TaskManagerTrait for CooperativeTaskManager {
     }
 }
 
-impl CooperativeTaskManager {
+impl<T> CooperativeTaskManager<T>
+where
+    T: TaskQueue,
+{
     /// Create new task manager.
-    pub(crate) const fn new() -> CooperativeTaskManager {
+    pub(crate) const fn new() -> CooperativeTaskManager<T> {
         CooperativeTaskManager {
-            tasks: [
-                None, None, None, None, None, None, None, None, None, None, None,
-            ],
+            // tasks: Default::default(),
+            tasks: [None; NUM_PRIORITIES],
             next_task_id: 0,
             exec_task_id: None,
         }
@@ -201,22 +207,15 @@ impl CooperativeTaskManager {
                     task_id, priority
                 );
             };
-            if let Some(task_index) = vec.iter().position(|task_vec| task_id == task_vec.id) {
-                vec.remove(task_index);
-            } else {
-                panic!(
-                    "Error: delete_task: Task with id {} not found in the task list.",
-                    task_id
-                );
-            }
+            T::delete_task(vec, task_id);
         }
     }
 
     /// Get a task by ```id``` and return it.
     pub fn get_task_by_id<'a>(id: TaskIdType) -> Option<&'a mut CooperativeTask> {
         unsafe {
-            for vec in TASK_MANAGER.tasks.iter_mut().flatten() {
-                for task in vec.iter_mut() {
+            for queue in TASK_MANAGER.tasks.iter_mut().flatten() {
+                for task in queue.iter_mut() {
                     if task.id == id {
                         return Some(task);
                     }
@@ -227,43 +226,19 @@ impl CooperativeTaskManager {
         // panic!("Error: get_task_by_id: Task with id {} not found.", id);
     }
 
-    /// Get task ```id``` by its position in ```tasks``` vector.
-    pub fn get_id_by_position(priority: TaskPriorityType, position: usize) -> TaskIdType {
-        if priority >= NUM_PRIORITIES {
-            panic!("Error: get_id_by_priorities: Task's priority {} is invalid. It must be between 0 and {}.", priority, NUM_PRIORITIES);
-        }
-        unsafe {
-            if TASK_MANAGER.tasks[priority].is_none() {
-                panic!(
-                    "Error: get_id_by_position: No tasks found with priority {}.",
-                    priority
-                );
-            }
-            if TASK_MANAGER.tasks[priority].as_ref().unwrap().len() - 1 < position {
-                panic!(
-                    "Error: get_id_by_position: No tasks found for task on position {}.",
-                    position
-                );
-            }
-            TASK_MANAGER.tasks[priority]
-                .as_ref()
-                .unwrap()
-                .get(position)
-                .unwrap()
-                .id
-        }
-    }
-
     /// Push task to the queue.
     fn push_to_queue(task: CooperativeTask) {
         unsafe {
             let priority = task.priority;
 
             if TASK_MANAGER.tasks[priority].is_none() {
-                TASK_MANAGER.tasks[priority] = Some(Vec::new());
+                TASK_MANAGER.tasks[priority] = Some(T::new());
             }
 
-            TASK_MANAGER.tasks[priority].as_mut().unwrap().push(task);
+            TASK_MANAGER.tasks[priority]
+                .as_mut()
+                .unwrap()
+                .push_task(task);
         }
     }
 
@@ -280,7 +255,7 @@ impl CooperativeTaskManager {
     }
 
     /// Push task to the other queue end.
-    fn push_to_end(task: &mut CooperativeTask) {
+    fn move_to_queue_end(task: &mut CooperativeTask) {
         let task_copy = task.clone();
         CooperativeTaskManager::terminate_task(task.id);
         CooperativeTaskManager::push_to_queue(task_copy);
@@ -304,7 +279,7 @@ impl CooperativeTaskManager {
                         }
                     }
                     TaskStatusType::Sleeping => {
-                        CooperativeTaskManager::push_to_end(exec_task);
+                        CooperativeTaskManager::move_to_queue_end(exec_task);
                     }
                     TaskStatusType::Terminated => {
                         CooperativeTaskManager::terminate_task(exec_task_id);
@@ -359,8 +334,8 @@ impl CooperativeTaskManager {
             panic!("Error: count_tasks_with_priority: Task's priority {} is invalid. It must be between 0 and {}.", priority, NUM_PRIORITIES);
         }
         unsafe {
-            if let Some(vec) = TASK_MANAGER.tasks[priority].as_ref() {
-                vec.len()
+            if let Some(queue) = TASK_MANAGER.tasks[priority].as_ref() {
+                queue.len()
             } else {
                 0
             }

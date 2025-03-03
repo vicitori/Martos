@@ -3,8 +3,10 @@ extern crate alloc;
 use crate::task_manager::task::{
     TaskLoopFunctionType, TaskSetupFunctionType, TaskStopConditionFunctionType,
 };
+use crate::task_manager::task_queue::TaskQueue;
 
 mod task;
+mod task_queue;
 
 cfg_if::cfg_if! {
     if #[cfg(feature = "preemptive")] {
@@ -12,7 +14,7 @@ cfg_if::cfg_if! {
         pub type TaskManager = preemptive::PreemptiveTaskManager;
     } else {
         mod cooperative;
-        pub type TaskManager = cooperative::CooperativeTaskManager;
+        pub type TaskManager = cooperative::CooperativeTaskManager< dyn TaskQueue>;
     }
 }
 
