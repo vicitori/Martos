@@ -1,10 +1,4 @@
-use crate::task_manager::cooperative::{
-    CooperativeTask, CooperativeTaskManager, TaskIdType, TaskPriorityType,
-};
-use crate::task_manager::task::{
-    TaskLoopFunctionType, TaskSetupFunctionType, TaskStopConditionFunctionType,
-};
-use crate::task_manager::{TaskManager, TASK_MANAGER};
+use crate::task_manager::cooperative::{CooperativeTask, TaskIdType};
 
 use alloc::collections::LinkedList;
 use alloc::collections::VecDeque;
@@ -21,15 +15,13 @@ pub trait TaskQueue {
         Self: Sized;
     fn push_task(&mut self, task: CooperativeTask);
     fn delete_task(&mut self, task_id: TaskIdType);
-    fn get_task(self, id: TaskIdType);
-    fn get_len(self) -> usize;
+    fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask>;
+    fn get_first_task_id(&mut self) -> Option<TaskIdType>;
+    fn move_to_queue_end(&mut self, task_id: TaskIdType);
 }
 
 impl TaskQueue for VecDeque<CooperativeTask> {
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
+    fn new() -> Self {
         VecDeque::new()
     }
 
@@ -39,7 +31,7 @@ impl TaskQueue for VecDeque<CooperativeTask> {
 
     fn delete_task(&mut self, task_id: TaskIdType) {
         unsafe {
-            if let Some(task_index) = self.iter().position(|task_vec| task_id == task_vec.id) {
+            if let Some(task_index) = self.iter().position(|task| task_id == task.id) {
                 self.remove(task_index);
             } else {
                 panic!(
@@ -49,21 +41,31 @@ impl TaskQueue for VecDeque<CooperativeTask> {
             }
         }
     }
-
-    fn get_task(self, id: TaskIdType) {
-        todo!()
+    fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask> {
+        self.iter_mut().find(|task| task.id == id)
     }
 
-    fn get_len(self) -> usize {
-        self.len()
+    fn get_first_task_id(&mut self) -> Option<TaskIdType> {
+        if let Some(task) = self.front() {
+            return Some(task.id);
+        }
+        None
+    }
+
+    fn move_to_queue_end(&mut self, task_id: TaskIdType) {
+        if let Some(task_index) = self.iter().position(|task| task.id == task_id) {
+            let task = self.remove(task_index);
+            self.push(task);
+        } else {
+            panic!(
+                "Error: move_to_queue_end: Can not find task with id {}.",
+                task_id
+            );
+        }
     }
 }
-
 impl TaskQueue for Vec<CooperativeTask> {
-    fn new() -> Self
-    where
-        Self: Sized,
-    {
+    fn new() -> Self {
         Vec::new()
     }
 
@@ -73,7 +75,7 @@ impl TaskQueue for Vec<CooperativeTask> {
 
     fn delete_task(&mut self, task_id: TaskIdType) {
         unsafe {
-            if let Some(task_index) = self.iter().position(|task_vec| task_id == task_vec.id) {
+            if let Some(task_index) = self.iter().position(|task| task_id == task.id) {
                 self.remove(task_index);
             } else {
                 panic!(
@@ -83,13 +85,27 @@ impl TaskQueue for Vec<CooperativeTask> {
             }
         }
     }
-
-    fn get_task(self, id: TaskIdType) {
-        todo!()
+    fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask> {
+        self.iter_mut().find(|task| task.id == id)
     }
 
-    fn get_len(self) -> usize {
-        self.len()
+    fn get_first_task_id(&mut self) -> Option<TaskIdType> {
+        if let Some(task) = self.first() {
+            return Some(task.id);
+        }
+        None
+    }
+
+    fn move_to_queue_end(&mut self, task_id: TaskIdType) {
+        if let Some(task_index) = self.iter().position(|task| task.id == task_id) {
+            let task = self.remove(task_index);
+            self.push(task);
+        } else {
+            panic!(
+                "Error: move_to_queue_end: Can not find task with id {}.",
+                task_id
+            );
+        }
     }
 }
 
@@ -105,50 +121,32 @@ impl TaskQueue for LinkedList<CooperativeTask> {
         self.push_back(task);
     }
 
-    // как удалить таски в связном списке?
     fn delete_task(&mut self, task_id: TaskIdType) {
         unsafe {
-            if let Some(task_index) = self.iter().position(|task_vec| task_id == task_vec.id) {
-                self.remove(task_index);
-            } else {
-                panic!(
-                    "Error: delete_task: Task with id {} not found in the task list.",
-                    task_id
-                );
+            let mut split_list = self.split_off(0);
+            while let Some(task) = split_list.pop_front() {
+                if task.id != task_id {
+                    self.push_back(task);
+                }
             }
         }
     }
 
-    fn get_task(self, id: TaskIdType) {
-        todo!()
+    fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask> {
+        self.iter_mut().find(|task| task.id == id)
     }
 
-    fn get_len(self) -> usize {
-        self.len()
+    fn get_first_task_id(&mut self) -> Option<TaskIdType> {
+        if let Some(task) = self.front() {
+            return Some(task.id);
+        }
+        None
+    }
+
+    fn move_to_queue_end(&mut self, task_id: TaskIdType) {
+        let mut split_list = self.split_off(0);
+        while let Some(task) = split_list.pop_front() {
+            self.push_back(task);
+        }
     }
 }
-// impl TaskQueue for TaskManager {
-//     fn push_to_queue(task: CooperativeTask) {
-//         unsafe {
-//             let priority = task.priority;
-//
-//             if TASK_MANAGER.tasks[priority].is_none() {
-//                 TASK_MANAGER.tasks[priority] = Some(Vec::new());
-//             }
-//
-//             TASK_MANAGER.tasks[priority].as_mut().unwrap().push(task);
-//         }
-//     }
-//     fn move_to_queue_end(task: &mut CooperativeTask) {
-//         let task_copy = task.clone();
-//         CooperativeTaskManager::terminate_task(task.id);
-//         CooperativeTaskManager::push_to_queue(task_copy);
-//     }
-//
-//     fn delete_task(
-//         task_id: crate::task_manager::cooperative::TaskIdType,
-//         priority: crate::task_manager::cooperative::TaskPriorityType,
-//     ) {
-//         todo!()
-//     }
-// }
