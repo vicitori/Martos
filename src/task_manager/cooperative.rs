@@ -2,18 +2,27 @@ extern crate alloc;
 
 use crate::task_manager::{
     task::{Task, TaskLoopFunctionType, TaskSetupFunctionType, TaskStopConditionFunctionType},
-    TaskManagerTrait, TASK_MANAGER,
+    task_queue::TaskQueue,
+    TaskManager, TaskManagerTrait, NUM_PRIORITIES, TASK_MANAGER,
+};
+use alloc::{
+    collections::{LinkedList, VecDeque},
+    vec::Vec,
 };
 
-use crate::task_manager::task_queue::TaskQueue;
+#[cfg(feature = "vec_deque")]
+pub type QueueType = VecDeque<CooperativeTask>;
+
+#[cfg(feature = "linked_list")]
+pub type QueueType = LinkedList<CooperativeTask>;
+
+#[cfg(feature = "vec")]
+pub type QueueType = Vec<CooperativeTask>;
 
 /// The number of tasks id can fit into a type usize.
 pub(crate) type TaskIdType = usize;
 /// Type of priority number of a task.
 pub(crate) type TaskPriorityType = usize;
-
-/// Number of existing priorities.
-const NUM_PRIORITIES: usize = 11;
 
 /// The status of the task changes during execution. ```enum TaskStatusType``` contains possible states.
 #[derive(PartialEq, Copy, Clone, Debug)]
@@ -32,7 +41,6 @@ pub enum TaskStatusType {
 
 /// The main structure for a cooperative task.
 /// Shell for ```Task```, the same for both cooperative and preemptive task managers.
-///
 #[repr(C)]
 #[derive(Clone)]
 pub struct CooperativeTask {
@@ -50,20 +58,18 @@ pub struct CooperativeTask {
 
 /// Cooperative task manager representation. Based on round-robin scheduling with priorities.
 #[repr(C)]
-pub struct CooperativeTaskManager<T: TaskQueue> {
+pub struct CooperativeTaskManager<QueueType> {
     /// Array of vectors with ```CooperativeTask``` to execute.
-    pub(crate) tasks: [Option<T>; NUM_PRIORITIES],
+    pub(crate) tasks: [Option<QueueType>; NUM_PRIORITIES],
     /// ```id``` of a task that will be created the next. The first created task has id 1.
     pub(crate) next_task_id: TaskIdType,
     /// ```id``` of executing task.
     pub(crate) exec_task_id: Option<TaskIdType>,
+    // pub(crate) new_queue: fn() -> dyn TaskQueue,
 }
 
 /// Cooperative implementation of ```TaskManagerTrait```.
-impl<T> TaskManagerTrait for CooperativeTaskManager<T>
-where
-    T: TaskQueue,
-{
+impl TaskManagerTrait for CooperativeTaskManager<QueueType> {
     /// Add a task to task manager. It should pass setup, loop, and condition functions.
     /// Task added with this function has ```priority``` 0.
     fn add_task(
@@ -82,17 +88,16 @@ where
     }
 }
 
-impl<T> CooperativeTaskManager<T>
-where
-    T: TaskQueue,
-{
+impl CooperativeTaskManager<QueueType> {
     /// Create new task manager.
-    pub(crate) const fn new() -> CooperativeTaskManager<T> {
-        CooperativeTaskManager {
+    pub(crate) const fn new() -> Self {
+        // pub(crate) const fn new(new_queue: fn() -> dyn TaskQueue) -> Self {
+        Self {
             // tasks: Default::default(),
-            tasks: [None; NUM_PRIORITIES],
+            tasks: [const { None }; NUM_PRIORITIES],
             next_task_id: 0,
             exec_task_id: None,
+            // new_queue,
         }
     }
 
@@ -201,29 +206,32 @@ where
     /// Remove task from ```tasks``` queue.
     fn delete_task(task_id: TaskIdType, priority: TaskPriorityType) {
         unsafe {
-            let Some(vec) = TASK_MANAGER.tasks[priority].as_mut() else {
-                panic!(
-                    "Error:delete_task: Task with id {} does not exist in priority {}.",
-                    task_id, priority
-                );
-            };
-            T::delete_task(vec, task_id);
+            match TASK_MANAGER.tasks[priority].as_mut() {
+                None => {
+                    panic!(
+                        "Error:delete_task: Task with id {} does not exist in priority {}.",
+                        task_id, priority
+                    );
+                }
+                Some(queue) => {
+                    TaskQueue::delete_task(queue, task_id);
+                }
+            }
         }
     }
 
     /// Get a task by ```id``` and return it.
     pub fn get_task_by_id<'a>(id: TaskIdType) -> Option<&'a mut CooperativeTask> {
         unsafe {
-            for queue in TASK_MANAGER.tasks.iter_mut().flatten() {
-                for task in queue.iter_mut() {
-                    if task.id == id {
+            for queue in TASK_MANAGER.tasks.iter_mut() {
+                if let Some(queue) = queue.as_mut() {
+                    if let Some(task) = TaskQueue::get_task_by_id(queue, id) {
                         return Some(task);
                     }
                 }
             }
         }
         None
-        // panic!("Error: get_task_by_id: Task with id {} not found.", id);
     }
 
     /// Push task to the queue.
@@ -232,22 +240,30 @@ where
             let priority = task.priority;
 
             if TASK_MANAGER.tasks[priority].is_none() {
-                TASK_MANAGER.tasks[priority] = Some(T::new());
+                TASK_MANAGER.tasks[priority] = Some(QueueType::new());
             }
-
-            TASK_MANAGER.tasks[priority]
-                .as_mut()
-                .unwrap()
-                .push_task(task);
+            match TASK_MANAGER.tasks[priority].as_mut() {
+                Some(queue) => {
+                    queue.push_task(task);
+                }
+                None => {
+                    panic!(
+                        "Error: push_to_queue: Failed to push task to queue with priority {}.",
+                        priority
+                    );
+                }
+            }
         }
     }
 
     /// Get id of task to be executed next.
     fn get_next_task_id() -> Option<TaskIdType> {
         unsafe {
-            for vec in TASK_MANAGER.tasks.iter_mut().rev().flatten() {
-                if let Some(task) = vec.iter().next() {
-                    return Some(task.id);
+            for queue in TASK_MANAGER.tasks.iter_mut().rev() {
+                if let Some(queue) = queue.as_mut() {
+                    if let Some(id) = TaskQueue::get_first_task_id(queue) {
+                        return Some(id);
+                    }
                 }
             }
         }
@@ -256,9 +272,16 @@ where
 
     /// Push task to the other queue end.
     fn move_to_queue_end(task: &mut CooperativeTask) {
-        let task_copy = task.clone();
-        CooperativeTaskManager::terminate_task(task.id);
-        CooperativeTaskManager::push_to_queue(task_copy);
+        unsafe {
+            if let Some(queue) = TASK_MANAGER.tasks[task.priority].as_mut() {
+                TaskQueue::move_to_queue_end(queue, task.id);
+            } else {
+                panic!(
+                    "Error: move_to_queue_end: Queue with priority {} is empty.",
+                    task.priority
+                );
+            }
+        }
     }
 
     /// One task manager iteration.
@@ -301,12 +324,18 @@ where
         }
     }
 
+    pub fn experiment_start_task_manager() {
+        while !TaskManager::is_empty() {
+            CooperativeTaskManager::schedule();
+        }
+    }
+
     /// Reset task manager to default state.
     pub fn reset_task_manager() {
         unsafe {
             for priority in 0..NUM_PRIORITIES {
-                if let Some(vec) = TASK_MANAGER.tasks[priority].as_mut() {
-                    vec.clear();
+                if let Some(queue) = TASK_MANAGER.tasks[priority].as_mut() {
+                    queue.clear();
                     TASK_MANAGER.tasks[priority] = None;
                 }
             }
@@ -318,9 +347,11 @@ where
     /// Check if the task manager is empty.
     pub fn is_empty() -> bool {
         unsafe {
-            for vec_opt in TASK_MANAGER.tasks.iter() {
-                if vec_opt.is_some() {
-                    return false;
+            for queue_opt in TASK_MANAGER.tasks.iter() {
+                if let Some(queue) = queue_opt {
+                    if !queue.is_empty() {
+                        return false;
+                    }
                 }
             }
             true
@@ -350,7 +381,7 @@ where
                 .tasks
                 .iter()
                 .flatten() // Skip None
-                .map(|vec| vec.len())
+                .map(|queue| queue.len())
                 .sum()
         }
     }

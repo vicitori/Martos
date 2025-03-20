@@ -1,10 +1,11 @@
-#![no_std]
+// #![no_std]
 extern crate alloc;
 
 mod ports;
 use ports::PortTrait;
 #[cfg(feature = "c-library")]
 pub mod c_api;
+pub mod experiment;
 pub mod task_manager;
 pub mod timer;
 #[cfg(any(target_arch = "riscv32", target_arch = "xtensa"))]
