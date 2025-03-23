@@ -91,13 +91,10 @@ impl TaskManagerTrait for CooperativeTaskManager<QueueType> {
 impl CooperativeTaskManager<QueueType> {
     /// Create new task manager.
     pub(crate) const fn new() -> Self {
-        // pub(crate) const fn new(new_queue: fn() -> dyn TaskQueue) -> Self {
         Self {
-            // tasks: Default::default(),
             tasks: [const { None }; NUM_PRIORITIES],
             next_task_id: 0,
             exec_task_id: None,
-            // new_queue,
         }
     }
 
@@ -139,7 +136,9 @@ impl CooperativeTaskManager<QueueType> {
         };
 
         unsafe {
-            // TODO: handling id overflow
+            if TASK_MANAGER.next_task_id == usize::MAX {
+                panic!("Error: Task ID overflow");
+            }
             TASK_MANAGER.next_task_id += 1;
             let task_id = TASK_MANAGER.next_task_id;
             CooperativeTask {
@@ -306,12 +305,19 @@ impl CooperativeTaskManager<QueueType> {
                     }
                     TaskStatusType::Terminated => {
                         CooperativeTaskManager::terminate_task(exec_task_id);
+                        unsafe {
+                            TASK_MANAGER.exec_task_id = None;
+                        }
                     }
                 }
                 if exec_task.status != TaskStatusType::Running {
                     unsafe {
                         TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id()
                     }
+                }
+            } else {
+                unsafe {
+                    TASK_MANAGER.exec_task_id = None;
                 }
             }
         }

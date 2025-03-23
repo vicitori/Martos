@@ -7,7 +7,7 @@ use martos::experiment::{
 // what to do in no_std env
 use martos::init_system;
 use std::env::args;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::io::Write;
 use std::time::Instant;
 
@@ -49,20 +49,32 @@ fn main() {
     let experiment_fn = choose_experiment(
         experiment_type.clone(), // , // , task_count
     );
-    init_system();
+    // init_system();
     let start_time = Instant::now();
     start_experiment(experiment_fn);
     let elapsed = start_time.elapsed();
 
-    let mut result_file = File::create("experiment_results.txt").expect("Unable to create file.");
+    let mut result_file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open("experiment_results.txt")
+        .expect("Unable to open file.");
+    let data_type = if cfg!(feature = "vec") {
+        "Vec"
+    } else if cfg!(feature = "vec_deque") {
+        "VecDeque"
+    } else if cfg!(feature = "linked_list") {
+        "LinkedList"
+    } else {
+        panic!("No data type feature enabled!");
+    };
     writeln!(
         result_file,
-        "Experiment type: {}, Task count: {}, Time Elapsed: {:?}",
+        "Experiment type: {}, Data struct: {}, Task count: {}, Time Elapsed: {:?}",
         experiment_type,
-        // data_struct,
-        // QueueType
+        data_type,
         get_task_count(),
-        elapsed.as_secs()
+        elapsed.as_secs_f64()
     )
     .expect("Unable to write to file.");
     println!("Results written to experiment_results.txt");

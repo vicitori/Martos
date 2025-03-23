@@ -112,13 +112,16 @@ impl TaskQueue for LinkedList<CooperativeTask> {
         self.push_back(task);
     }
 
+    // fn delete_task(&mut self, task_id: TaskIdType) {
+    //     let mut split_list = self.split_off(0);
+    //     while let Some(task) = split_list.pop_front() {
+    //         if task.id != task_id {
+    //             self.push_back(task);
+    //         }
+    //     }
+    // }
     fn delete_task(&mut self, task_id: TaskIdType) {
-        let mut split_list = self.split_off(0);
-        while let Some(task) = split_list.pop_front() {
-            if task.id != task_id {
-                self.push_back(task);
-            }
-        }
+        self.retain(|task| task.id != task_id);
     }
 
     fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask> {
