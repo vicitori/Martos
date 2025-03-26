@@ -134,11 +134,7 @@ impl CooperativeTaskManager<QueueType> {
             loop_fn,
             stop_condition_fn,
         };
-
         unsafe {
-            if TASK_MANAGER.next_task_id == usize::MAX {
-                panic!("Error: Task ID overflow");
-            }
             TASK_MANAGER.next_task_id += 1;
             let task_id = TASK_MANAGER.next_task_id;
             CooperativeTask {
@@ -181,11 +177,22 @@ impl CooperativeTaskManager<QueueType> {
     }
 
     /// Task can terminate and delete another task by ```id```.
-    pub fn terminate_task(id: TaskIdType) {
+    pub fn delete_task(id: TaskIdType) {
         let Some(task) = CooperativeTaskManager::get_task_by_id(id) else {
-            panic!("Error: terminate_task: Task with id {} not found.", id);
+            panic!("Error: delete_task: Task with id {} not found.", id);
         };
-        CooperativeTaskManager::delete_task(id, task.priority);
+        let queue_opt = unsafe { TASK_MANAGER.tasks[task.priority].as_mut() };
+        match queue_opt {
+            Some(queue) => {
+                TaskQueue::delete_task(queue, task.id);
+            }
+            None => {
+                panic!(
+                    "Error:delete_task: Task with id {} does not exist in priority {}.",
+                    task.id, task.priority
+                );
+            }
+        }
     }
 
     /// Wake up task in ```Sleeping``` state. Otherwise, panic.
@@ -202,31 +209,12 @@ impl CooperativeTaskManager<QueueType> {
         task.status = TaskStatusType::Ready;
     }
 
-    /// Remove task from ```tasks``` queue.
-    fn delete_task(task_id: TaskIdType, priority: TaskPriorityType) {
-        unsafe {
-            match TASK_MANAGER.tasks[priority].as_mut() {
-                None => {
-                    panic!(
-                        "Error:delete_task: Task with id {} does not exist in priority {}.",
-                        task_id, priority
-                    );
-                }
-                Some(queue) => {
-                    TaskQueue::delete_task(queue, task_id);
-                }
-            }
-        }
-    }
-
     /// Get a task by ```id``` and return it.
     pub fn get_task_by_id<'a>(id: TaskIdType) -> Option<&'a mut CooperativeTask> {
         unsafe {
-            for queue in TASK_MANAGER.tasks.iter_mut() {
-                if let Some(queue) = queue.as_mut() {
-                    if let Some(task) = TaskQueue::get_task_by_id(queue, id) {
-                        return Some(task);
-                    }
+            for queue in TASK_MANAGER.tasks.iter_mut().flatten() {
+                if let Some(task) = queue.get_task_by_id(id) {
+                    return Some(task);
                 }
             }
         }
@@ -235,9 +223,8 @@ impl CooperativeTaskManager<QueueType> {
 
     /// Push task to the queue.
     fn push_to_queue(task: CooperativeTask) {
+        let priority = task.priority;
         unsafe {
-            let priority = task.priority;
-
             if TASK_MANAGER.tasks[priority].is_none() {
                 TASK_MANAGER.tasks[priority] = Some(QueueType::new());
             }
@@ -256,13 +243,11 @@ impl CooperativeTaskManager<QueueType> {
     }
 
     /// Get id of task to be executed next.
-    fn get_next_task_id() -> Option<TaskIdType> {
+    pub(crate) fn get_next_task_id() -> Option<TaskIdType> {
         unsafe {
-            for queue in TASK_MANAGER.tasks.iter_mut().rev() {
-                if let Some(queue) = queue.as_mut() {
-                    if let Some(id) = TaskQueue::get_first_task_id(queue) {
-                        return Some(id);
-                    }
+            for queue in TASK_MANAGER.tasks.iter_mut().rev().flatten() {
+                if let Some(id) = TaskQueue::get_first_task_id(queue) {
+                    return Some(id);
                 }
             }
         }
@@ -270,7 +255,7 @@ impl CooperativeTaskManager<QueueType> {
     }
 
     /// Push task to the other queue end.
-    fn move_to_queue_end(task: &mut CooperativeTask) {
+    pub(crate) fn move_to_queue_end(task: &mut CooperativeTask) {
         unsafe {
             if let Some(queue) = TASK_MANAGER.tasks[task.priority].as_mut() {
                 TaskQueue::move_to_queue_end(queue, task.id);
@@ -284,41 +269,82 @@ impl CooperativeTaskManager<QueueType> {
     }
 
     /// One task manager iteration.
-    pub fn schedule() {
-        if !CooperativeTaskManager::is_empty() {
-            if let Some(exec_task_id) = unsafe { TASK_MANAGER.exec_task_id } {
-                let Some(exec_task) = CooperativeTaskManager::get_task_by_id(exec_task_id) else {
-                    panic!("Error: schedule: Task with id {} not found.", exec_task_id);
-                };
-                match exec_task.status {
-                    TaskStatusType::Ready => {
-                        exec_task.status = TaskStatusType::Running;
-                    }
-                    TaskStatusType::Running => {
-                        (exec_task.core.loop_fn)();
-                        if (exec_task.core.stop_condition_fn)() {
-                            exec_task.status = TaskStatusType::Terminated;
-                        }
-                    }
-                    TaskStatusType::Sleeping => {
-                        CooperativeTaskManager::move_to_queue_end(exec_task);
-                    }
-                    TaskStatusType::Terminated => {
-                        CooperativeTaskManager::terminate_task(exec_task_id);
+    #[cfg(feature = "linked_list")]
+    fn schedule() {
+        let exec_task_id_opt = unsafe { TASK_MANAGER.exec_task_id };
+        if let Some(exec_task_id) = exec_task_id_opt {
+            let task_opt = { CooperativeTaskManager::get_task_by_id(exec_task_id) };
+            let Some(mut exec_task) = task_opt else {
+                panic!("Error: schedule: Task with id {} not found.", exec_task_id);
+            };
+            match exec_task.status {
+                TaskStatusType::Ready => {
+                    exec_task.status = TaskStatusType::Running;
+                }
+                TaskStatusType::Running => {
+                    (exec_task.core.loop_fn)();
+                    if (exec_task.core.stop_condition_fn)() {
+                        exec_task.status = TaskStatusType::Terminated;
+                        CooperativeTaskManager::delete_task(exec_task_id);
+
                         unsafe {
-                            TASK_MANAGER.exec_task_id = None;
+                            TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id();
                         }
+                        return;
                     }
                 }
-                if exec_task.status != TaskStatusType::Running {
-                    unsafe {
-                        TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id()
+                TaskStatusType::Sleeping => {
+                    CooperativeTaskManager::move_to_queue_end(&mut exec_task);
+                }
+                TaskStatusType::Terminated => {
+                    CooperativeTaskManager::delete_task(exec_task_id);
+                    return;
+                }
+            }
+            if exec_task.status != TaskStatusType::Running {
+                unsafe { TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id() }
+            }
+        }
+    }
+
+    /// One task manager iteration.
+    #[cfg(not(feature = "linked_list"))]
+    fn schedule() {
+        let exec_task_id_opt = unsafe { TASK_MANAGER.exec_task_id };
+        if let Some(exec_task_id) = exec_task_id_opt {
+            let Some(mut exec_task) = CooperativeTaskManager::get_task_by_id(exec_task_id) else {
+                panic!("Error: schedule: Task with id {} not found.", exec_task_id);
+            };
+            match exec_task.status {
+                TaskStatusType::Ready => {
+                    exec_task.status = TaskStatusType::Running;
+                }
+                TaskStatusType::Running => {
+                    (exec_task.core.loop_fn)();
+                    let Some(exec_task) = CooperativeTaskManager::get_task_by_id(exec_task_id)
+                    else {
+                        panic!("Error: schedule: Task with id {} not found.", exec_task_id);
+                    };
+                    if (exec_task.core.stop_condition_fn)() {
+                        exec_task.status = TaskStatusType::Terminated;
+                        CooperativeTaskManager::delete_task(exec_task_id);
+
+                        unsafe {
+                            TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id();
+                        }
+                        return;
                     }
                 }
-            } else {
-                unsafe {
-                    TASK_MANAGER.exec_task_id = None;
+                TaskStatusType::Sleeping => {
+                    CooperativeTaskManager::move_to_queue_end(&mut exec_task);
                 }
+                TaskStatusType::Terminated => {
+                    CooperativeTaskManager::delete_task(exec_task_id);
+                    return;
+                }
+            }
+            if exec_task.status != TaskStatusType::Running {
+                unsafe { TASK_MANAGER.exec_task_id = CooperativeTaskManager::get_next_task_id() }
             }
         }
     }
@@ -334,6 +360,7 @@ impl CooperativeTaskManager<QueueType> {
         while !TaskManager::is_empty() {
             CooperativeTaskManager::schedule();
         }
+        println!("All tasks accomplished.\n----------------------------------\n");
     }
 
     /// Reset task manager to default state.
@@ -341,7 +368,7 @@ impl CooperativeTaskManager<QueueType> {
         unsafe {
             for priority in 0..NUM_PRIORITIES {
                 if let Some(queue) = TASK_MANAGER.tasks[priority].as_mut() {
-                    queue.clear();
+                    queue.make_clear();
                     TASK_MANAGER.tasks[priority] = None;
                 }
             }
@@ -355,13 +382,13 @@ impl CooperativeTaskManager<QueueType> {
         unsafe {
             for queue_opt in TASK_MANAGER.tasks.iter() {
                 if let Some(queue) = queue_opt {
-                    if !queue.is_empty() {
+                    if !queue.does_empty() {
                         return false;
                     }
                 }
             }
-            true
         }
+        true
     }
 
     /// Count tasks of the specified priority.
@@ -370,12 +397,11 @@ impl CooperativeTaskManager<QueueType> {
         if priority >= NUM_PRIORITIES {
             panic!("Error: count_tasks_with_priority: Task's priority {} is invalid. It must be between 0 and {}.", priority, NUM_PRIORITIES);
         }
-        unsafe {
-            if let Some(queue) = TASK_MANAGER.tasks[priority].as_ref() {
-                queue.len()
-            } else {
-                0
-            }
+        let queue_opt = unsafe { TASK_MANAGER.tasks[priority].as_ref() };
+        if let Some(queue) = queue_opt {
+            queue.get_len()
+        } else {
+            0
         }
     }
 
@@ -387,7 +413,7 @@ impl CooperativeTaskManager<QueueType> {
                 .tasks
                 .iter()
                 .flatten() // Skip None
-                .map(|queue| queue.len())
+                .map(|queue| queue.get_len())
                 .sum()
         }
     }

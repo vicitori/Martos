@@ -17,14 +17,15 @@ preemptive = []
 network = ["esp-wifi"]
 mips64_timer_tests = []
 cooperative_tests = []
-vec_deque = []
-linked_list = []
-vec = []
+vec_deque = ["cooperative"]
+linked_list = ["cooperative"]
+vec = ["cooperative"]
 
 
 [dependencies]
 cfg-if = "1.0.0"
 lazy_static = "1.5.0"
+rand = "0.9.0"
 
 [target.'cfg(any(target_arch = "riscv32", target_arch = "xtensa"))'.dependencies]
 esp-alloc = "0.5.0"
@@ -34,11 +35,6 @@ esp-wifi = { version = "0.10.1", features = ["wifi"], optional = true }
 [dev-dependencies]
 sequential-test = "0.2.4"
 
-
 [[bin]]
 name = "martos"
-path = "src/main.rs"
-
-[lib]
-name = "martos"
-path = "src/lib.rs"
+path = "src/run_experiment.rs"

@@ -8,15 +8,8 @@ pub(crate) trait TaskQueue {
     fn get_task_by_id(&mut self, id: TaskIdType) -> Option<&mut CooperativeTask>;
     fn get_first_task_id(&mut self) -> Option<TaskIdType>;
     fn move_to_queue_end(&mut self, task_id: TaskIdType);
-    fn len(&self) -> usize {
-        self.len()
-    }
-    fn clear(&mut self) {
-        self.clear()
-    }
-    fn is_empty(&self) -> bool {
-        self.is_empty()
-    }
+    fn make_clear(&mut self);
+    fn does_empty(&self) -> bool;
 }
 #[cfg(feature = "vec_deque")]
 impl TaskQueue for VecDeque<CooperativeTask> {
@@ -64,6 +57,14 @@ impl TaskQueue for VecDeque<CooperativeTask> {
             );
         }
     }
+
+    fn make_clear(&mut self) {
+        self.clear()
+    }
+
+    fn does_empty(&self) -> bool {
+        self.is_empty()
+    }
 }
 
 #[cfg(feature = "vec")]
@@ -104,6 +105,14 @@ impl TaskQueue for Vec<CooperativeTask> {
             );
         }
     }
+
+    fn make_clear(&mut self) {
+        self.clear()
+    }
+
+    fn does_empty(&self) -> bool {
+        self.is_empty()
+    }
 }
 
 #[cfg(feature = "linked_list")]
@@ -112,14 +121,6 @@ impl TaskQueue for LinkedList<CooperativeTask> {
         self.push_back(task);
     }
 
-    // fn delete_task(&mut self, task_id: TaskIdType) {
-    //     let mut split_list = self.split_off(0);
-    //     while let Some(task) = split_list.pop_front() {
-    //         if task.id != task_id {
-    //             self.push_back(task);
-    //         }
-    //     }
-    // }
     fn delete_task(&mut self, task_id: TaskIdType) {
         self.retain(|task| task.id != task_id);
     }
@@ -135,10 +136,18 @@ impl TaskQueue for LinkedList<CooperativeTask> {
         None
     }
 
-    fn move_to_queue_end(&mut self, task_id: TaskIdType) {
+    fn move_to_queue_end(&mut self, _task_id: TaskIdType) {
         let mut split_list = self.split_off(0);
         while let Some(task) = split_list.pop_front() {
             self.push_back(task);
         }
+    }
+
+    fn make_clear(&mut self) {
+        self.clear()
+    }
+
+    fn does_empty(&self) -> bool {
+        self.is_empty()
     }
 }

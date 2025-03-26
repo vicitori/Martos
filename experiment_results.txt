@@ -1,0 +1,2 @@
+Experiment type: sleep_task, Data struct: LinkedList, Task count: 10000, Time Elapsed: 0.767457875
+Experiment type: sleep_task, Data struct: LinkedList, Task count: 10000, Time Elapsed: 0.772563

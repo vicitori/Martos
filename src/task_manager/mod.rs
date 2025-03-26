@@ -11,7 +11,7 @@ pub mod task;
 pub(crate) mod task_queue;
 
 cfg_if::cfg_if! {
-    if #[cfg(feature = "prmptive")] {
+    if #[cfg(feature = "preemptive")] {
         pub(crate) mod preemptive;
         pub type TaskManager = preemptive::PreemptiveTaskManager;
     } else {

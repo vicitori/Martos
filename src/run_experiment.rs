@@ -1,37 +1,28 @@
-use martos::task_manager::{task::TaskLoopFunctionType, TaskManager, TaskManagerTrait};
-
+use martos::experiment::put_to_sleep_task::put_to_sleep_task_experiment;
 use martos::experiment::{
-    add_task_experiment::add_task_experiment, delete_task_experiment::delete_task_experiment,
-    get_task_count, set_task_count, wake_task_experiment::wake_task_experiment,
+    add_priority_task::add_priority_task_experiment, add_task::add_task_experiment,
+    delete_task::delete_task_experiment, get_task_count, get_time, set_task_count,
+    wake_up_task::wake_up_task_experiment,
 };
-// what to do in no_std env
-use martos::init_system;
-use std::env::args;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::time::Instant;
+use martos::task_manager::{task::TaskLoopFunctionType, TaskManager, TaskManagerTrait};
+use std::{env::args, fs::OpenOptions, io::Write};
 
 fn input_handler() -> String {
     let experiment_type = args().nth(1).expect("Can not find [experiment type] and [task count] arguments. Please restart program and put all arguments for experiment.");
-    // let data_struct = args().nth(1).expect(
-    //     "No arguments supplied. Please restart program and put all arguments for experiment.",
-    // );
-
     let cnt = args().nth(2).expect("Can not find [task count] arguments. Please restart program and put all arguments for experiment.").parse::<usize>().unwrap();
     set_task_count(cnt);
     experiment_type
 }
-fn choose_experiment(experiment_type: String, // , task_count: usize
-) -> TaskLoopFunctionType {
+
+fn choose_experiment(experiment_type: String) -> TaskLoopFunctionType {
     let loop_fn = match experiment_type.as_str() {
         "add_task" => add_task_experiment,
+        "add_prio_task" => add_priority_task_experiment,
         "delete_task" => delete_task_experiment,
-        // "sleep_task" => sleep_task_experiment(task_count),
-        "wake_task" => wake_task_experiment,
-        // "combined" => combined_experiment(task_count),
-        _ => panic!("Unknown experiment type: {}", experiment_type),
+        "sleep_task" => put_to_sleep_task_experiment,
+        "wake_task" => wake_up_task_experiment,
+        _ => panic!("Unknown experiment type: {}.", experiment_type),
     };
-
     loop_fn
 }
 fn start_experiment(experiment_fn: TaskLoopFunctionType) {
@@ -40,19 +31,9 @@ fn start_experiment(experiment_fn: TaskLoopFunctionType) {
 }
 
 fn main() {
-    let
-        // (
-        experiment_type
-    // ,
-        // task_count)
-        = input_handler();
-    let experiment_fn = choose_experiment(
-        experiment_type.clone(), // , // , task_count
-    );
-    // init_system();
-    let start_time = Instant::now();
+    let experiment_type = input_handler();
+    let experiment_fn = choose_experiment(experiment_type.clone());
     start_experiment(experiment_fn);
-    let elapsed = start_time.elapsed();
 
     let mut result_file = OpenOptions::new()
         .append(true)
@@ -74,8 +55,8 @@ fn main() {
         experiment_type,
         data_type,
         get_task_count(),
-        elapsed.as_secs_f64()
+        get_time()
     )
     .expect("Unable to write to file.");
-    println!("Results written to experiment_results.txt");
+    println!("Results written to experiment_results.txt.");
 }
